@@ -109,6 +109,7 @@ async def set_bet_val(call: CallbackQuery):
     b = float(call.data.split("_")[2])
     await set_user_setting(call.from_user.id, "selected_bet", b)
     await call.answer(f"Ставка: {b}$")
+    await log_event(call.bot, "💵 Смена ставки", call.from_user, f"Новая ставка: {b:.2f} $")
     await open_dice_menu(call)
 
 
@@ -144,6 +145,8 @@ async def run_dice_game(call: CallbackQuery, mode_name, count_dices, check_fn):
             f"<blockquote>Выигрыш: <b>+{payout:.2f}</b> {EMOJI['cash']} (x{rate})</blockquote>",
             reply_markup=dice_menu_kb(bet, in_chat=is_group), parse_mode="HTML"
         )
+        await log_event(call.bot, "🎲 Кости — ВЫИГРЫШ", call.from_user,
+                        f"Режим: {mode_name}\nСтавка: {bet:.2f} $\nВыигрыш: +{payout:.2f} $ (x{rate})\n{desc}")
     else:
         await record_game(uid, f"Кости: {mode_name}", bet, 0.0, False, chat_id=c_id, chat_title=c_title)
         await call.message.answer(
@@ -151,6 +154,8 @@ async def run_dice_game(call: CallbackQuery, mode_name, count_dices, check_fn):
             f"<blockquote>Ставка <b>{bet:.2f}</b> {EMOJI['cash']} сгорела.</blockquote>",
             reply_markup=dice_menu_kb(bet, in_chat=is_group), parse_mode="HTML"
         )
+        await log_event(call.bot, "🎲 Кости — ПРОИГРЫШ", call.from_user,
+                        f"Режим: {mode_name}\nСтавка: -{bet:.2f} $\n{desc}")
 
 
 @games_router.callback_query(F.data == "dice_m_exact")
@@ -267,6 +272,7 @@ async def cmd_cancel_game(message: Message):
         deleted = await db_cancel_active_session(uid)
     if deleted:
         await message.reply("🛑 <b>Игра отменена!</b>\n<blockquote>Сессия очищена.</blockquote>", parse_mode="HTML")
+        await log_event(message.bot, "🛑 /game_off", message.from_user, "Активная сессия отменена")
     else:
         await message.reply("ℹ️ Нет активных игр.")
 
@@ -323,6 +329,7 @@ async def set_mines_val(call: CallbackQuery):
     cnt = int(call.data.split("_")[2])
     await set_user_setting(call.from_user.id, "selected_mines", cnt)
     await call.answer(f"Установлено: {cnt} мин")
+    await log_event(call.bot, "💣 Смена кол-ва мин", call.from_user, f"Мин: {cnt}")
     await open_mines_menu(call)
 
 
@@ -388,6 +395,8 @@ async def start_mines_action(call: CallbackQuery):
         f"SHA-256:\n<code>{s_hash}</code></blockquote>"
     )
     await safe_edit(call, text, build_mines_kb(data["grid"], True, 0))
+    await log_event(call.bot, "💣 Мины — старт", call.from_user,
+                    f"Ставка: {bet:.2f} $\nМин: {mines_count}")
 
 
 @games_router.callback_query(F.data.startswith("m_clk_"))
@@ -411,7 +420,10 @@ async def click_mine_cell(call: CallbackQuery):
                 f"🛡️ Hash: <code>{data['hash']}</code>\n"
                 f"Соль: <code>{data['salt']}</code></blockquote>"
             )
-            return await safe_edit(call, text, build_mines_kb(data["field"], False, 0))
+            await safe_edit(call, text, build_mines_kb(data["field"], False, 0))
+            await log_event(call.bot, "💣 Мины — БАБАХ", call.from_user,
+                            f"Ставка: -{data['bet']:.2f} $\nПройдено шагов: {data['step']}")
+            return
         data["step"] += 1
         data["grid"][idx] = 0
         coef = calc_mines_mult(data["mines"], data["step"])
@@ -426,7 +438,10 @@ async def click_mine_cell(call: CallbackQuery):
                 f"<blockquote>Множитель: <b>x{coef}</b> | Выигрыш: <b>+{win_amt:.2f} $</b>\n\n"
                 f"Hash: <code>{data['hash']}</code>\nСоль: <code>{data['salt']}</code></blockquote>"
             )
-            return await safe_edit(call, text, build_mines_kb(data["grid"], False, 0))
+            await safe_edit(call, text, build_mines_kb(data["grid"], False, 0))
+            await log_event(call.bot, "💣 Мины — ЗАЧИЩЕНО", call.from_user,
+                            f"Ставка: {data['bet']:.2f} $\nВыигрыш: +{win_amt:.2f} $ (x{coef})")
+            return
         await db_save_session(uid, "mines", data)
     text = (
         f"{EMOJI['gem']} <b>Алмаз!</b>\n\n"
@@ -457,6 +472,8 @@ async def mines_cashout_call(call: CallbackQuery):
         f"Hash: <code>{data['hash']}</code>\nСоль: <code>{data['salt']}</code></blockquote>"
     )
     await safe_edit(call, text, build_mines_kb(data["field"], False, 0))
+    await log_event(call.bot, "💣 Мины — кэшаут", call.from_user,
+                    f"Ставка: {data['bet']:.2f} $\nВыигрыш: +{payout:.2f} $ (x{coef})\nШагов: {data['step']}")
 
 
 # ==================== БАШНЯ (TOWER) ====================
@@ -498,6 +515,7 @@ async def set_traps_val(call: CallbackQuery):
     t = int(call.data.split("_")[2])
     await set_user_setting(call.from_user.id, "selected_traps", t)
     await call.answer(f"Сложность: {t}")
+    await log_event(call.bot, "🗼 Смена сложности", call.from_user, f"Ловушек: {t}")
     await open_tower_menu(call)
 
 
@@ -571,6 +589,8 @@ async def start_tower_action(call: CallbackQuery):
         f"SHA-256:\n<code>{s_hash}</code></blockquote>"
     )
     await safe_edit(call, text, build_tower_kb(0, grid, True, 0))
+    await log_event(call.bot, "🗼 Башня — старт", call.from_user,
+                    f"Ставка: {bet:.2f} $\nЛовушек: {traps}")
 
 
 @games_router.callback_query(F.data.startswith("t_clk_"))
@@ -592,7 +612,10 @@ async def click_tower_floor(call: CallbackQuery):
                 f"<blockquote>Потеряно: <b>{data['bet']:.2f}</b> {EMOJI['cash']}\n\n"
                 f"Hash: <code>{data['hash']}</code>\nСоль: <code>{data['salt']}</code></blockquote>"
             )
-            return await safe_edit(call, text, build_tower_kb(fl, data["grid"], False, 0))
+            await safe_edit(call, text, build_tower_kb(fl, data["grid"], False, 0))
+            await log_event(call.bot, "🗼 Башня — ЛОВУШКА", call.from_user,
+                            f"Этаж: {fl+1}\nСтавка: -{data['bet']:.2f} $")
+            return
         data["floor"] += 1
         coef = calc_tower_mult(data["traps"], data["floor"])
         cur_win = round(data["bet"] * coef, 2)
@@ -606,7 +629,10 @@ async def click_tower_floor(call: CallbackQuery):
                 f"<blockquote>Множитель: <b>x{coef}</b> | Выигрыш: <b>+{cur_win:.2f} $</b>\n\n"
                 f"Hash: <code>{data['hash']}</code>\nСоль: <code>{data['salt']}</code></blockquote>"
             )
-            return await safe_edit(call, text, build_tower_kb(10, data["grid"], False, 0))
+            await safe_edit(call, text, build_tower_kb(10, data["grid"], False, 0))
+            await log_event(call.bot, "🗼 Башня — ВЕРШИНА", call.from_user,
+                            f"Ставка: {data['bet']:.2f} $\nВыигрыш: +{cur_win:.2f} $ (x{coef})")
+            return
         await db_save_session(uid, "tower", data)
     text = (
         f"{EMOJI['tower']} <b>Этаж {data['floor']}!</b>\n\n"
@@ -636,3 +662,5 @@ async def tower_cashout_call(call: CallbackQuery):
         f"Hash: <code>{data['hash']}</code>\nСоль: <code>{data['salt']}</code></blockquote>"
     )
     await safe_edit(call, text, build_tower_kb(data["floor"], data["grid"], False, 0))
+    await log_event(call.bot, "🗼 Башня — кэшаут", call.from_user,
+                    f"Ставка: {data['bet']:.2f} $\nВыигрыш: +{win:.2f} $ (x{coef})\nЭтаж: {data['floor']}")
