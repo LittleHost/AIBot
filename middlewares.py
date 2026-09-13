@@ -1,9 +1,11 @@
 # middlewares.py
 import time
-from typing import Any, Awaitable, Callable, Dict
+from typing import Dict
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery
 from database import get_user, set_chat_link
+from config import LOG_CHAT_ID
+from utils import log_event
 
 
 class ThrottlingMiddleware(BaseMiddleware):
@@ -43,7 +45,8 @@ class ThrottlingMiddleware(BaseMiddleware):
 
 
 class ChatLinkMiddleware(BaseMiddleware):
-    """Автосохранение ссылки чата без блокировки хендлеров."""
+    """Автосохранение ссылки чата БЕЗ блокировки остальных хендлеров."""
+
     async def __call__(self, handler, event, data):
         if isinstance(event, Message) and event.chat.type in ("group", "supergroup"):
             if event.chat.username:
@@ -51,4 +54,58 @@ class ChatLinkMiddleware(BaseMiddleware):
                     await set_chat_link(event.chat.id, f"https://t.me/{event.chat.username}")
                 except Exception:
                     pass
+        return await handler(event, data)
+
+
+class GlobalLogMiddleware(BaseMiddleware):
+    """Логирует ВСЕ сообщения и нажатия кнопок в лог-чат.
+    Ставится как outer_middleware на dp.update."""
+
+    # Не логируем эти callback_data — они шумные/технические
+    SKIP_CALLBACK_PREFIXES = (
+        "none",
+        "m_clk_",   # клики в минах — логируются через log_event внутри
+        "t_clk_",   # клики в башне
+    )
+
+    async def __call__(self, handler, event, data):
+        try:
+            # Message
+            if isinstance(event, Message):
+                u = event.from_user
+                if u and not u.is_bot:
+                    text = event.text or ""
+                    chat_info = ""
+                    if event.chat.type in ("group", "supergroup"):
+                        chat_info = f"\n📍 Чат: <b>{event.chat.title or event.chat.id}</b> (<code>{event.chat.id}</code>)"
+                    # Пропускаем технические апдейты
+                    if text or event.dice or event.photo or event.document:
+                        preview = (text[:200] + "...") if len(text) > 200 else text
+                        await log_event(
+                            event.bot,
+                            "💬 Сообщение",
+                            u,
+                            f"Текст: <code>{preview}</code>{chat_info}"
+                        )
+            # CallbackQuery
+            elif isinstance(event, CallbackQuery):
+                cb = event.data or ""
+                if not any(cb.startswith(p) for p in self.SKIP_CALLBACK_PREFIXES):
+                    msg_text = ""
+                    try:
+                        if event.message and event.message.caption:
+                            msg_text = f"\n📎 На сообщении: <i>{event.message.caption[:100]}</i>"
+                    except Exception:
+                        pass
+                    await log_event(
+                        event.bot,
+                        f"🖱 Callback: <code>{cb}</code>",
+                        event.from_user,
+                        f"Кнопка нажата{msg_text}"
+                    )
+        except Exception as e:
+            # Логгер не должен ломать основной поток
+            import logging
+            logging.error(f"GlobalLogMiddleware error: {e}")
+
         return await handler(event, data)
