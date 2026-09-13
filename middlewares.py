@@ -3,7 +3,7 @@ import time
 from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
-from database import get_user
+from database import get_user, set_chat_link
 
 
 class ThrottlingMiddleware(BaseMiddleware):
@@ -39,4 +39,16 @@ class ThrottlingMiddleware(BaseMiddleware):
                     await event.reply(f"<blockquote>{warning}</blockquote>", parse_mode="HTML")
                 return
             self.users_last_action[user_id] = time.time()
+        return await handler(event, data)
+
+
+class ChatLinkMiddleware(BaseMiddleware):
+    """Автосохранение ссылки чата без блокировки хендлеров."""
+    async def __call__(self, handler, event, data):
+        if isinstance(event, Message) and event.chat.type in ("group", "supergroup"):
+            if event.chat.username:
+                try:
+                    await set_chat_link(event.chat.id, f"https://t.me/{event.chat.username}")
+                except Exception:
+                    pass
         return await handler(event, data)
