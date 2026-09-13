@@ -49,7 +49,7 @@ def admin_main_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats", style="primary")
         ],
         [
-            InlineKeyboardButton(text="💳 Шлюзы", callback_data="adm_gateways_menu", style="primary"),
+            InlineKeyboardButton(text="💳 Шлюзы и выводы", callback_data="adm_gateways_menu", style="primary"),
             InlineKeyboardButton(text="♻️ Сбросить ТОП", callback_data="adm_reset_top", style="danger")
         ]
     ])
@@ -419,7 +419,7 @@ async def adm_p_back(call: CallbackQuery, state: FSMContext):
     await safe_edit(call, text, kb)
 
 
-# ============================ ОСТАЛЬНЫЕ ФУНКЦИИ ============================
+# ============================ ШЛЮЗЫ И РЕЖИМ ВЫВОДОВ ============================
 
 @admin_router.callback_query(F.data == "adm_gateways_menu")
 async def adm_gateways_menu(call: CallbackQuery):
@@ -427,12 +427,24 @@ async def adm_gateways_menu(call: CallbackQuery):
         return
     cb_status = await get_setting("gateway_cryptobot", "1")
     cb_btn_text = "🟢 CryptoBot: Вкл" if cb_status == "1" else "🔴 CryptoBot: Выкл"
+
+    wd_mode = await get_setting("withdraw_mode", "manual")
+    if wd_mode == "auto":
+        wd_btn_text = "⚡ Выводы: АВТО"
+        wd_style = "success"
+    else:
+        wd_btn_text = "🛠 Выводы: РУЧНЫЕ"
+        wd_style = "primary"
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=cb_btn_text, callback_data="adm_toggle_gw_cryptobot", style="success" if cb_status == "1" else "danger")],
+        [InlineKeyboardButton(text=wd_btn_text, callback_data="adm_toggle_withdraw_mode", style=wd_style)],
         [InlineKeyboardButton(text="⬅️ В панель", callback_data="adm_main_menu", style="danger")]
     ])
     await safe_edit(call,
-        "💳 <b>Управление шлюзами пополнений:</b>\n\n<blockquote>Включение/выключение CryptoBot.</blockquote>",
+        "💳 <b>Управление шлюзами и выводами:</b>\n\n"
+        "<blockquote>• Включение/выключение CryptoBot.\n"
+        "• Режим вывода: <b>ручной</b> (заявка админу) или <b>авто</b> (создание чека).</blockquote>",
         kb
     )
 
@@ -449,6 +461,21 @@ async def adm_toggle_gateway(call: CallbackQuery):
     await call.answer(f"Шлюз {gw}: {new_val}", show_alert=True)
     await adm_gateways_menu(call)
 
+
+@admin_router.callback_query(F.data == "adm_toggle_withdraw_mode")
+async def adm_toggle_withdraw_mode(call: CallbackQuery, bot: Bot):
+    if not is_admin(call.from_user.id):
+        return
+    current = await get_setting("withdraw_mode", "manual")
+    new_mode = "auto" if current == "manual" else "manual"
+    await set_setting("withdraw_mode", new_mode)
+    await call.answer(f"Режим выводов: {'АВТО' if new_mode == 'auto' else 'РУЧНОЙ'}", show_alert=True)
+    await log_event(bot, "Админ: смена режима выводов", call.from_user,
+                    f"Новый режим: {new_mode}")
+    await adm_gateways_menu(call)
+
+
+# ============================ ОСТАЛЬНЫЕ ФУНКЦИИ ============================
 
 @admin_router.callback_query(F.data == "adm_create_promo")
 async def start_create_promo(call: CallbackQuery, state: FSMContext):
