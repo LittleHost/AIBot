@@ -227,10 +227,3 @@ async def process_claim_jackpot(call: CallbackQuery, bot: Bot):
     await safe_edit(call, new_text, updated_kb)
     await call.answer(f"✅ {claimed_amount:.2f}$ на ваш баланс!", show_alert=True)
     await log_event(bot, "Джекпот чата", call.from_user, f"Сумма: +{claimed_amount:.2f} $")
-
-
-# Автоматическое сохранение ссылки при любом сообщении в чате
-@chat_router.message(F.chat.type.in_(["group", "supergroup"]))
-async def auto_save_chat_link(message: Message):
-    if message.chat.username:
-        await set_chat_link(message.chat.id, f"https://t.me/{message.chat.username}")
