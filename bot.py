@@ -28,7 +28,7 @@ from aiogram.types import (
 # CONFIG
 # ============================================================================
 BOT_TOKEN = "8578922515:AAHww7vkF_9xYkw9qNQ6-rT1rQD4pQFoNlw"
-ADMIN_IDS = [7966949924]
+oADMIN_IDS = [7966949924]
 REF_PERCENT = 0.05
 
 DEFAULT_CHANNEL = "@nc_bet"
