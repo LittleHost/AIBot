@@ -9,7 +9,7 @@ from aiogram.types import Update, BotCommand, BotCommandScopeDefault
 
 from config import BOT_TOKEN
 from database import init_db
-from middlewares import ThrottlingMiddleware, ChatLinkMiddleware
+from middlewares import ThrottlingMiddleware, ChatLinkMiddleware, GlobalLogMiddleware
 
 from handlers_user import user_router
 from handlers_chat import chat_router
@@ -43,6 +43,9 @@ async def main():
     dp.callback_query.middleware(ThrottlingMiddleware())
     dp.message.middleware(ChatLinkMiddleware())
 
+    # ГЛОБАЛЬНЫЙ ЛОГГЕР — логирует всё, что делают юзеры
+    dp.update.outer_middleware(GlobalLogMiddleware())
+
     @dp.update.outer_middleware()
     async def debug_updates(handler, event: Update, data: dict):
         if event.message:
@@ -66,7 +69,7 @@ async def main():
     bot_info = await bot.get_me()
     logging.info(f"🤖 Бот запущен: @{bot_info.username} (ID: {bot_info.id})")
 
-    # Фоновый таск автопроверки инвойсов (автоподтверждение пополнений)
+    # Фоновый таск автопроверки инвойсов
     asyncio.create_task(background_invoice_checker(bot))
 
     await dp.start_polling(bot)
