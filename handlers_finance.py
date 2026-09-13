@@ -1,6 +1,8 @@
 # handlers_finance.py
 import aiosqlite
 import math
+import asyncio
+import logging
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -121,23 +123,42 @@ async def process_deposit(call: CallbackQuery, amount: float):
 async def check_invoice_status_callback(call: CallbackQuery, bot: Bot):
     parts = call.data.split("_")
     gw, inv_id = parts[2], parts[3]
+    result = await try_confirm_invoice(bot, inv_id, gw)
+    if result is True:
+        await safe_edit(call,
+            f"✅ <b>Оплата подтверждена!</b>\n\n<blockquote>Зачислено на баланс.</blockquote>",
+            InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="В меню", callback_data="back_to_main", style="primary")]])
+        )
+    elif result == "processing":
+        await call.answer("⏳ Проверяется...", show_alert=True)
+    else:
+        await call.answer("❌ Оплата пока не найдена. Попробуйте позже.", show_alert=True)
+
+
+async def try_confirm_invoice(bot: Bot, inv_id: str, gw: str):
+    """Пытается подтвердить инвойс.
+    True — успешно зачислено, 'processing' — уже в проверке, False — не оплачен."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM invoices WHERE invoice_id = ?", (inv_id,)) as cur:
             inv = await cur.fetchone()
     if not inv:
-        return await call.answer("❌ Счёт не найден.", show_alert=True)
+        return False
     if inv["status"] == "paid":
-        return await call.answer("✅ Уже оплачен!", show_alert=True)
+        return True
     if inv["status"] == "processing":
-        return await call.answer("⏳ Проверяется...", show_alert=True)
+        return "processing"
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE invoices SET status = 'processing' WHERE invoice_id = ?", (inv_id,))
         await db.commit()
     is_paid = False
     if gw == "cb":
-        res = await cb_check_stat(int(inv_id))
-        is_paid = (res == "paid")
+        try:
+            res = await cb_check_stat(int(inv_id))
+            is_paid = (res == "paid")
+        except Exception as e:
+            logging.error(f"cb_check_stat error: {e}")
+            is_paid = False
     async with aiosqlite.connect(DB_PATH) as db:
         if is_paid:
             await db.execute("UPDATE invoices SET status = 'paid' WHERE invoice_id = ?", (inv_id,))
@@ -153,22 +174,44 @@ async def check_invoice_status_callback(call: CallbackQuery, bot: Bot):
                 await db.execute("INSERT INTO transactions (user_id, type, amount, gateway, status) VALUES (?, 'bonus', ?, ?, 'success')",
                                  (inv["user_id"], inv["bonus_amount"], gw))
             await db.commit()
-            bonus_text = f"Бонус: +{inv['bonus_amount']:.2f} $" if inv["bonus_amount"] > 0 else ""
-            text = (
-                f"✅ <b>Оплата подтверждена!</b>\n\n<blockquote>"
-                f"Зачислено: <b>+{inv['amount']:.2f} $</b>\n{bonus_text}\n"
-                f"Отыгрыш: <b>{inv['wager_required']:.2f} $</b></blockquote>"
-            )
-            await safe_edit(call, text, InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="В меню", callback_data="back_to_main", style="primary")]
-            ]))
-            await log_event(bot, "Пополнение баланса",
-                            call.from_user,
-                            f"Сумма: +{inv['amount']:.2f} $\nБонус: +{inv['bonus_amount']:.2f} $\nОтыгрыш: {inv['wager_required']:.2f} $")
+            try:
+                await bot.send_message(
+                    inv["user_id"],
+                    f"✅ <b>Пополнение зачислено!</b>\n\n<blockquote>"
+                    f"Сумма: <b>+{inv['amount']:.2f} $</b>\n"
+                    f"Бонус: <b>+{inv['bonus_amount']:.2f} $</b>\n"
+                    f"Отыгрыш: <b>{inv['wager_required']:.2f} $</b></blockquote>",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+            await log_event(bot, "Пополнение (авто)", None,
+                            f"User: <code>{inv['user_id']}</code> +{inv['amount']:.2f} $ (бонус +{inv['bonus_amount']:.2f} $)")
+            return True
         else:
             await db.execute("UPDATE invoices SET status = 'active' WHERE invoice_id = ?", (inv_id,))
             await db.commit()
-            return await call.answer("❌ Оплата не подтверждена.", show_alert=True)
+            return False
+
+
+async def background_invoice_checker(bot: Bot):
+    """Фоновый таск: каждые 15 секунд проверяет активные инвойсы и автоподтверждает оплату."""
+    await asyncio.sleep(10)
+    while True:
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("SELECT invoice_id, gateway FROM invoices WHERE status = 'active' ORDER BY created_at DESC LIMIT 50") as cur:
+                    rows = await cur.fetchall()
+            for row in rows:
+                try:
+                    await try_confirm_invoice(bot, row["invoice_id"], row["gateway"])
+                except Exception as e:
+                    logging.error(f"auto-confirm error for {row['invoice_id']}: {e}")
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            logging.error(f"background_invoice_checker error: {e}")
+        await asyncio.sleep(15)
 
 
 @finance_router.callback_query(F.data == "profile_w")
@@ -257,6 +300,7 @@ async def on_withdraw_choice(call: CallbackQuery, bot: Bot):
         await safe_edit(call, text, kb)
         await log_event(bot, "Вывод (авто)", call.from_user, f"Сумма: -{amount:.2f} $")
         return
+    # === Ручной режим ===
     await update_balance(uid, -amount)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("INSERT INTO withdraw_requests (user_id, amount, gateway, status) VALUES (?, ?, ?, 'pending')", (uid, amount, gw))
