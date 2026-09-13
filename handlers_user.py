@@ -12,8 +12,8 @@ from database import (
 )
 from handlers_checks import process_start_check
 from config import EMOJI, ICON_IDS, TOP_NUMBERS
-from keyboards import main_kb
-from utils import safe_edit
+from keyboards import main_kb, games_select_kb
+from utils import safe_edit, log_event
 
 user_router = Router()
 
@@ -72,6 +72,8 @@ async def on_start(message: Message, bot: Bot):
             except (ValueError, IndexError):
                 pass
     await register_user(message.from_user.id, message.from_user.username or "", ref_id, has_prem)
+    await log_event(bot, "🚀 Старт бота", message.from_user,
+                    f"Реф: {ref_id}" if ref_id else "Без рефа")
     bot_info = await message.bot.get_me()
     try:
         photo = FSInputFile("start.png")
@@ -122,6 +124,19 @@ async def back_to_main(call: CallbackQuery):
     await safe_edit(call, text, main_kb())
 
 
+@user_router.callback_query(F.data == "open_games")
+async def open_games_menu(call: CallbackQuery):
+    text = (
+        f"{EMOJI['fire']} <b>Игровое меню NiceBet</b>\n\n"
+        f"<blockquote>Выбери игру:\n\n"
+        f"🎲 Кости — угадай число/чёт/больше\n"
+        f"💣 Мины — открой алмазы, не попав на мину\n"
+        f"🗼 Башня — поднимайся и забирай банк\n"
+        f"⚽ Спорт — ставки на события</blockquote>"
+    )
+    await safe_edit(call, text, games_select_kb())
+
+
 RANK_CASHBACK_PERCENT = {"None": 0.0, "Bronze": 3.0, "Silver": 6.0, "Gold": 8.0}
 
 
@@ -158,6 +173,7 @@ async def claim_cashback_process(call: CallbackQuery):
         await db.execute("INSERT INTO transactions (user_id, type, amount, gateway, status) VALUES (?, 'cashback', ?, 'internal', 'success')", (call.from_user.id, cb_amt))
         await db.commit()
     await call.answer(f"✅ Зачислено +{cb_amt:.2f}$!", show_alert=True)
+    await log_event(call.bot, "💎 Кэшбэк получен", call.from_user, f"+{cb_amt:.2f} $")
     await show_cashback_menu(call)
 
 
@@ -293,6 +309,7 @@ async def save_disp_mode(call: CallbackQuery):
     mode = call.data.replace("set_disp_", "")
     await set_user_setting(call.from_user.id, "display_mode", mode)
     await call.answer("✅ Обновлено!", show_alert=True)
+    await log_event(call.bot, "✏️ Смена отображения", call.from_user, f"Режим: {mode}")
     text, kb = await get_private_profile_data(call.from_user.id, call.from_user.first_name, call.from_user.username)
     await safe_edit(call, text, kb)
 
@@ -361,6 +378,7 @@ async def claim_ref_bonus(call: CallbackQuery):
     if claimed <= 0:
         return await call.answer("❌ На реф-балансе нет средств.", show_alert=True)
     await call.answer(f"✅ +{claimed:.2f}$ на баланс!", show_alert=True)
+    await log_event(call.bot, "👥 Реф-бонус получен", call.from_user, f"+{claimed:.2f} $")
     await on_referrals(call)
 
 
@@ -415,4 +433,6 @@ async def activate_promo(message: Message):
         await db.execute("INSERT INTO promo_activations (code, user_id) VALUES (?, ?)", (code, uid))
         await db.execute("UPDATE users SET balance = ROUND(balance + ?, 4) WHERE user_id = ?", (promo["reward"], uid))
         await db.commit()
+    await log_event(message.bot, "🎁 Промокод активирован", message.from_user,
+                    f"Код: <code>{code}</code>\n+{promo['reward']:.2f} $")
     await message.reply(f"🎉 <b>Промокод активирован!</b>\n<blockquote>+{promo['reward']:.2f} $</blockquote>", parse_mode="HTML")
